@@ -1,0 +1,272 @@
+---
+title: "Final_Code"
+author: "Pavan Kumar Boinapalli"
+date: "27 November 2018"
+output: word_document
+---
+
+##Storing the package names required in a vector
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+packages_to_install <- c("gains","e1071","xgboost","tidyverse","ggplot2","mltools","data.table","nnet","caret","FNN","gmodels","MASS","randomForest","DiscriMiner")
+new_packages <- packages_to_install[!(packages_to_install %in% installed.packages()[,"Package"])]
+```
+
+##Packages which are not available gets installed and all the required packages get loaded
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+if(length(new_packages)) install.packages(new_packages)
+sapply(packages_to_install,library,character.only=T)
+```
+
+## Reading the train data into csv file.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train <- read.csv("data/train_users_2.csv",stringsAsFactors = FALSE)
+```
+
+##Based on the EDA creating a new feature i.e difference of no of days between first booking date and account created date.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train$date_first_booking <- ifelse(airbnb.train$date_first_booking=="",airbnb.train$date_account_created,airbnb.train$date_first_booking)
+```
+
+
+##creating a cleaning function which eliminates all the missing data to NA and droppingx
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=TRUE}
+clean_data <- function(airbnb.data){
+  airbnb.data[airbnb.data==""] <- NA
+  airbnb.data[airbnb.data=="-unknown-"] <- NA
+  airbnb.data[airbnb.data=="<NA>"] <- NA
+  #cleaning age variable
+  airbnb.data <- airbnb.data %>%
+    mutate(
+      age_cleaned = ifelse(age < 14 | age > 100,0,age),
+      age_bucket = cut(age_cleaned,breaks = c(seq(14,100,4)))
+      
+    )
+  
+  #creating day, month, year combinations from dates
+  options("scipen"=999)
+  airbnb.data <- airbnb.data %>%
+    mutate(
+      account_created_day = as.integer(substring(date_account_created,9,10)),
+      account_created_month = as.integer(substring(date_account_created,6,7)),
+      account_created_year = as.integer(substring(date_account_created,1,4)),
+      first_active = as.double(timestamp_first_active),
+      first_active_year = as.integer(substring(as.character(first_active),1,4)),
+      first_active_month = as.integer(substring(as.character(first_active),5,6)),
+      first_active_day = as.integer(substring(as.character(first_active),7,8)),
+      first_active_hour = as.integer(substring(as.character(first_active),9,10)),
+      first_active_minute = as.integer(substring(as.character(first_active),11,12)),
+      first_active_sec = as.integer(substring(as.character(first_active),13,14)),
+      first_active_ct = as.POSIXct(paste(paste(first_active_year,first_active_month,first_active_day,sep="-"),sep=" ",paste(sep=":",first_active_hour,first_active_minute,first_active_minute)),format = "%Y-%m-%d %H:%M:%S"),
+      acct_created = as.POSIXct(paste(date_account_created,sep=" ","00:00:00"),format = "%Y-%m-%d %H:%M:%S"),
+      date_booking = as.POSIXct(paste(date_first_booking,sep=" ","00:00:00")),
+      time_to_book = as.numeric(date_booking - acct_created),
+      time_for_active = as.numeric(first_active_ct - acct_created)
+    )
+  airbnb.data$date_account_created <- NULL
+  airbnb.data$timestamp_first_active <- NULL
+  airbnb.data$first_active <- NULL
+  airbnb.data$age_cleaned <- NULL
+  airbnb.data$age <- NULL
+  airbnb.data$date_first_booking <- NULL
+  airbnb.data[,c("date_booking","first_active_year","first_active_month","first_active_day","first_active_hour","first_active_minute","first_active_sec","first_active_ct","acct_created","account_created_year","account_created_month","account_created_day")] <- NULL
+  return(airbnb.data)
+}
+```
+
+
+##Passing the training data to get cleaned dataset 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train.cleaned <- clean_data(airbnb.train)
+```
+
+## Converting the id into character to avoid converting the ids into dummy variables
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train.cleaned %>% mutate_if(is.character, as.factor) -> airbnb.train.cleaned
+airbnb.train.cleaned$id <- as.character(airbnb.train.cleaned$id)
+rownames(airbnb.train.cleaned) <- airbnb.train.cleaned$id
+airbnb.train.cleaned$id <- NULL
+```
+
+##Creating the dummy variables using onehot encoding
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+airbnb.train.cleaned$country_destination <- as.character(airbnb.train.cleaned$country_destination)
+airbnb.train.dummy <- one_hot(naCols = F,sparsifyNAs = T,dt = data.table(airbnb.train.cleaned))
+airbnb.train.dummy <- airbnb.train.dummy[complete.cases(airbnb.train.dummy),]
+rownames(airbnb.train.dummy) <- airbnb.train.dummy$id
+airbnb.train.dummy$id <- NULL
+```
+
+## Setting the seed to regenerate the same partition and Create partition without dummy
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(1)
+train.index <- createDataPartition(airbnb.train.cleaned$country_destination,p=0.8,list = FALSE)
+train.data <- airbnb.train.cleaned[train.index,]
+valid.data <- airbnb.train.cleaned[-train.index,]
+```
+
+
+## Dropping the country destination from the test data set
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+valid.dest.nodummy <- valid.data$country_destination
+valid.data$country_destination <- NULL
+```
+
+
+## Setting the seed to regenerate the same partition and Create partition with dummy
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(1)
+train.dummy.index <- createDataPartition(airbnb.train.dummy$country_destination,p=0.8,list = FALSE)
+train.dummy.data <- as.data.frame(airbnb.train.dummy[train.dummy.index,])
+valid.dummy.data <- as.data.frame(airbnb.train.dummy[-train.dummy.index,])
+valid.dest.dummy <- valid.dummy.data$country_destination
+valid.dummy.data$country_destination <- NULL
+```
+
+
+## Normalize dummy data using preProcess() from CARET
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+norm.values <- preProcess(train.dummy.data[,!colnames(train.dummy.data)%in%c("country_destination")], method=c("center", "scale"))
+train.norm <- predict(norm.values,train.dummy.data)
+train.norm$country_destination <- as.factor(train.dummy.data$country_destination)
+valid.norm <- predict(norm.values,valid.dummy.data)
+```
+
+## Naive Classification predicts everything as NDF
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+confusionMatrix(as.factor(rep("NDF",nrow(valid.dummy.data))),as.factor(valid.dest.dummy))
+```
+
+### Compute knn for different k on validation
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+accuracy.df <- data.frame(k = seq(1, 15, 1), accuracy = rep(0, 15))
+for(i in 1:15) {
+  knn.model <- knn(train = train.norm[,!colnames(train.norm)%in%c("country_destination")],test = valid.norm,cl = train.norm$country_destination,k = i)
+  accuracy.df[i, 2] <- confusionMatrix(as.factor(knn.model), as.factor(valid.dest.dummy))$overall[1]
+}
+```
+
+## Computing the accuracy with respect to each k value
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(accuracy.df,aes(x=k,y=accuracy))+geom_line()
+accuracy.df
+```
+#
+
+#multinom
+
+#Create partition
+#multinom
+#set.seed(1)
+#airbnb.train.cleaned2 <- airbnb.train.cleaned
+#airbnb.train.cleaned2 <- airbnb.train.cleaned[!airbnb.train.cleaned$account_created_year%in%c("2010","2011","2012","2013"),]
+#airbnb.train.cleaned2$account_created_year <- NULL
+#airbnb.train.cleaned2 <- airbnb.train.cleaned2[1:50000,]
+
+#train.data2 <- train.data
+#train.data2$country_destination <- as.factor(train.data2$country_destination)
+#train.data2$dest <- relevel(train.data2$country_destination, ref = "NDF")
+#train.data$country_destination <- NULL
+#unique(airbnb.train.cleaned2$country_destination)
+#reg1 <- multinom(dest ~ ., data = train.data2)
+
+##Predicting NDF or not using logistic regression
+
+# Logistic regression generalised linear model ,binomial logistic regresion
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+logit.train <- train.data[complete.cases(train.data),]
+logit.train[logit.train$country_destination!="NDF",]$country_destination <- 1
+logit.train[logit.train$country_destination=="NDF",]$country_destination <- 0
+logit.valid <- valid.data[complete.cases(valid.data),]
+logit.valid.dest <- valid.dest.nodummy
+logit.valid.dest[logit.valid.dest!="NDF"] <- 1
+logit.valid.dest[logit.valid.dest=="NDF"] <- 0
+logit.train$country_destination <- logit.train$country_destination %>% as.numeric
+logit.valid.dest <- logit.valid.dest %>% as.numeric
+for(col in colnames(logit.valid)){
+  if(col!="country_destination" && class(logit.train[[col]]) == "factor"){
+    a <- levels(logit.train[[col]])
+    a <- append(a,setdiff(levels(logit.valid[[col]]),a))
+    logit.train[[col]] <- factor(logit.train[[col]],levels = a)
+  }
+}
+logit.train$first_browser <- NULL
+logit.valid$first_browser <- NULL
+```
+
+
+## Running the logistic regression
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+logit.model <- glm(country_destination ~ ., data = logit.train, family = "binomial") 
+options(scipen=999)
+summary(logit.model)
+logit.pred <- predict(logit.model, logit.valid,type = "response")
+names(logit.valid.dest) <- rownames(valid.data)
+logit.gains <- logit.pred
+logit.pred <- ifelse(logit.pred>0.5,1,0)
+logit.pred <- as.factor(logit.pred)
+logit.valid.dest.new <- as.factor(logit.valid.dest)
+logit.valid.dest.new <- logit.valid.dest[!names(logit.valid.dest) %in% setdiff(names(logit.valid.dest),names(logit.pred))]
+```
+
+## Performance and accuracy using confusion matrix for logistic algorithm
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+confusionMatrix(as.factor(logit.pred),as.factor(logit.valid.dest.new)) 
+```
+
+#Performance Evaluation
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+gain <- gains(as.numeric(logit.valid.dest.new), as.numeric(logit.gains),groups = 10)
+##lift chart##
+plot(c(0,gain$cume.pct.of.total*sum(as.numeric(logit.valid.dest.new)))~c(0,gain$cume.obs),
+     xlab="# cases", ylab="Cumulative positive classes", main="Lift Chart", type="l")
+##naive classficiation line
+lines(c(0,sum(logit.valid.dest.new))~c(0,length(logit.valid.dest.new)), lty=5,col="red")
+## area between naive line and the lift curve is positive so our model performs better than naive.
+##decile wise lift chart
+barplot(gain$mean.resp/mean(as.numeric(logit.valid.dest.new)), names.arg = gain$depth,
+        xlab = "Percentile", ylab = "Mean Response", main = "Decile-wise lift chart")
+```
+# Applying the linear discriminant analysis
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+lda.train <- train.norm[which(colSums(train.norm!=0)!=0)]
+lda.model <- lda(country_destination~., data = lda.train)
+lda.pred <- predict(lda.model,valid.norm[,!colnames(valid.norm) %in% setdiff(append(colnames(lda.train),"country_destination"),colnames(valid.norm))])
+```
+
+#  Performance and accuracy using confusion matrix for linear discriminant analysis
+```{r}
+confusionMatrix(as.factor(lda.pred$class),as.factor(valid.dest.dummy))
+table(lda.pred$class)
+table(airbnb.train$country_destination)
+```
+
+#xgboost
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+train.data$country_destination <- as.character(train.data$country_destination)
+lab <- train.data$country_destination
+lab <- dplyr::recode(lab,'NDF'=0, 'US'=1, 'other'=2, 'FR'=3, 'CA'=4, 'GB'=5, 'ES'=6, 'IT'=7, 'PT'=8, 'NL'=9, 'DE'=10, 'AU'=11)
+xgb <- xgboost(data = data.matrix(train.data[,!colnames(train.data)%in%c("country_destination")]),label=lab, eta = 0.1,
+               max_depth = 9, 
+               nround=25, 
+               subsample = 0.5,
+               colsample_bytree = 0.5,
+               seed = 1,
+               eval_metric = "merror",
+               objective = "multi:softprob",
+               num_class = 12,
+               nthread = 4,
+               missing=NA
+)
+a <- predict(xgb, data.matrix(valid.data),missing=NA)
+predictions <- as.data.frame(matrix(a, nrow=12))
+rownames(predictions) <- c('NDF','US','other','FR','CA','GB','ES','IT','PT','NL','DE','AU')
+predictions_top <- as.vector(apply(predictions, 2, function(x) names(sort(x)[12])))
+predictions_top <- as.factor(predictions_top)
+ref <- as.factor(valid.dest.nodummy)
+levels(predictions_top) <- append(levels(predictions_top),setdiff(levels(ref),levels(predictions_top)))
+confusionMatrix(as.factor(valid.dest.nodummy),as.factor(predictions_top))
+```
+
+
+
