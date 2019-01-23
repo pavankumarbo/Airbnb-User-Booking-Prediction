@@ -63,13 +63,13 @@ function used: glm
 ## Evaluation:
 libraries used: gains,
 
-###Multiclass classification:
+### Multiclass classification:
 
 ![multiclass](https://raw.githubusercontent.com/TrueCoder1/Airbnb-New-User-Pred/master/plots/MultiClass%20ClassificationPerformance.png)
 
 As we can see XGBoost achieves overall 80% accuracy and high sensitivities for "US" and "NDF".Although this itself is good prediction, we can use resampling methods like SMOTE oversampling or undersampling to see if there will be a better performance in predicting other country destinations.
 
-###User Booking Turnout Evaluation
+### User Booking Turnout Evaluation
 
 The logistic regression algorithm does well in predicting user booking with accuracy of 88% which is pretty high!
 
@@ -77,7 +77,7 @@ The logistic regression algorithm does well in predicting user booking with accu
 ![DecileListChart](https://raw.githubusercontent.com/TrueCoder1/Airbnb-New-User-Pred/master/plots/DecileWiseLiftChart.png)
 
 
-## Findings
+## Conclusion
 • Seasonality in Bookings, we have seen a huge growth in bookings in the month of June which seems to be the booking season for customers.
 
 • Some of the features in the datasets can be added by improving the features like adding the “difference between the date of first booking and date first active”.
